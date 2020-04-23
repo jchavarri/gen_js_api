@@ -4,11 +4,11 @@
 
 (** OCaml view on JS exceptions *)
 
-type t
+type 'a t
 
-val name: t -> string
-val message: t -> string
-val stack: t -> string option
-val to_string: t -> string
+val name: 'a t -> string
+val message: 'a t -> string
+val stack: 'a t -> string option
+val to_string: 'a t -> string
 
-exception Error of t
+exception Error of Ojs.any

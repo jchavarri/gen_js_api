@@ -215,13 +215,15 @@ let get_js_constr ~global_attrs name attributes =
 type typ =
   | Arrow of arrow_params
   | Unit of Location.t
-  | Js
+  | Js_any
+  | Js_var of string
   | Name of string * typ list
   | Variant of { location: Location.t;
                  global_attrs:attributes;
                  attributes:attributes;
                  constrs:constructor list }
   | Tuple of typ list
+  | Typ_var of label
 
 and lab =
   | Arg
@@ -343,7 +345,8 @@ and parse_typ ~global_attrs ty =
   | Ptyp_constr ({txt = lid; loc = _}, tl) ->
       begin match String.concat "." (Longident.flatten lid), tl with
       | "unit", [] -> Unit ty.ptyp_loc
-      | "Ojs.t", [] -> Js
+      | "Ojs.any", [] -> Js_any
+      | "Ojs.t", [{ptyp_desc = Ptyp_var label; _}] -> Js_var label
       | s, tl -> Name (s, List.map (parse_typ ~global_attrs) tl)
       end
   | Ptyp_variant (rows, Closed, None) ->
@@ -364,6 +367,8 @@ and parse_typ ~global_attrs ty =
       let typs = List.map (parse_typ ~global_attrs) typs in
       Tuple typs
 
+  | Ptyp_var label -> Typ_var label
+  
   | _ ->
       error ty.ptyp_loc Cannot_parse_type
 
@@ -411,8 +416,8 @@ let auto ~global_attrs s ty =
     else MethCall js
   in
   match ty with
-  | Arrow {ty_args = [{lab=Arg; att=_; typ=Name (t, [])}]; ty_vararg = None; unit_arg = false; ty_res = Js} when check_suffix ~suffix:"_to_js" s = Some t -> Cast
-  | Arrow {ty_args = [{lab=Arg; att=_; typ=Js}]; ty_vararg = None; unit_arg = false; ty_res = Name (t, [])} when check_suffix ~suffix:"_of_js" s = Some t -> Cast
+  | Arrow {ty_args = [{lab=Arg; att=_; typ=Name (t, [])}]; ty_vararg = None; unit_arg = false; ty_res = Js_any} when check_suffix ~suffix:"_to_js" s = Some t -> Cast
+  | Arrow {ty_args = [{lab=Arg; att=_; typ=Js_any}]; ty_vararg = None; unit_arg = false; ty_res = Name (t, [])} when check_suffix ~suffix:"_of_js" s = Some t -> Cast
   | Arrow {ty_args = [_]; ty_vararg = None; unit_arg = false; ty_res = Unit _} when has_prefix ~prefix:"set_" s -> PropSet (in_global_scope ~global_attrs (js_name ~global_attrs (drop_prefix ~prefix:"set_" s)))
   | Arrow {ty_args = [{lab=Arg; att=_; typ=Name _}]; ty_vararg = None; unit_arg = false; ty_res = Unit _} -> methcall s
   | Arrow {ty_args = [{lab=Arg; att=_; typ=Name _}]; ty_vararg = None; unit_arg = false; ty_res = _} -> PropGet (js_name ~global_attrs s)
@@ -601,7 +606,9 @@ let incl = function
 
 let nolabel args = List.map (function x -> Nolabel, x) args
 
-let ojs_typ = Typ.constr (mknoloc (Longident.parse "Ojs.t")) []
+let ojs_any_typ = Typ.constr (mknoloc (Longident.parse "Ojs.any")) []
+
+let ojs_typ label = Typ.constr (mknoloc (Longident.parse "Ojs.t")) [Typ.var label]
 
 let ojs_var s = Exp.ident (mknoloc (Ldot (Lident "Ojs", s)))
 
@@ -736,8 +743,9 @@ let assert_false = Exp.assert_ (Exp.construct (mknoloc (Longident.parse "false")
 
 let rewrite_typ_decl t =
   let t = {t with ptype_private = Public} in
-  match t.ptype_manifest, t.ptype_kind with
-  | None, Ptype_abstract -> {t with ptype_manifest = Some ojs_typ}
+  match t.ptype_manifest, t.ptype_kind, t.ptype_params with
+  | None, Ptype_abstract, [] -> {t with ptype_manifest = Some ojs_any_typ}
+  | None, Ptype_abstract, [{ptyp_desc = Ptyp_var label; _},  Invariant] -> {t with ptype_manifest = Some (ojs_typ label)}
   | _ -> t
 
 let is_simple_enum params =
@@ -784,7 +792,7 @@ let get_variant_kind loc attrs =
 
 let rec js2ml ty exp =
   match ty with
-  | Js ->
+  | Js_any | Js_var _ | Typ_var _ ->
       exp
   | Name (s, tl) ->
       let s = if builtin_type s then "Ojs." ^ s else s in
@@ -855,7 +863,7 @@ and js2ml_of_variant ~variant loc ~global_attrs attrs constrs exp =
               process_default [int_default] (fun int_default -> Some int_default, int_cases, string_default, string_cases)
           | `Enum when arg_typ = string_typ ->
               process_default [string_default] (fun string_default -> int_default, int_cases, Some string_default, string_cases)
-          | `Sum _ | `Union _ when arg_typ = Js ->
+          | `Sum _ | `Union _ when arg_typ = Js_any ->
               process_default [int_default; string_default] (fun default -> Some default, int_cases, Some default, string_cases)
           | _ -> otherwise()
           end
@@ -920,7 +928,7 @@ and js2ml_of_variant ~variant loc ~global_attrs attrs constrs exp =
 
 and ml2js ty exp =
   match ty with
-  | Js ->
+  | Js_any | Js_var _ | Typ_var _ ->
       exp
   | Name (s, tl) ->
       let s = if builtin_type s then "Ojs." ^ s else s in
@@ -1039,7 +1047,7 @@ and ml2js_of_variant ~variant loc ~global_attrs attrs constrs exp =
                 (fun e (i, typi, xi) ->
                    Exp.sequence
                      (ojs "array_set" [var args; int i; ml2js typi (var xi)]) e)
-                (mkobj [pair args_field Js (var args)])
+                (mkobj [pair args_field Js_any (var args)])
                 xis))
     | Record args ->
         let x = fresh() in
@@ -1169,7 +1177,8 @@ and js2ml_unit ty_res res =
 and gen_typ = function
   | Name (s, tyl) ->
       Typ.constr (mknoloc (Longident.parse s)) (List.map gen_typ tyl)
-  | Js -> ojs_typ
+  | Js_any -> ojs_any_typ
+  | Js_var label -> ojs_typ label
   | Unit _ ->
       Typ.constr (mknoloc (Lident "unit")) []
   | Arrow {ty_args; ty_vararg; unit_arg; ty_res} ->
@@ -1193,7 +1202,9 @@ and gen_typ = function
       Typ.variant rows Closed None
   | Tuple typs ->
       Typ.tuple (List.map gen_typ typs)
-
+  | Typ_var label ->
+      Typ.var label
+  
 let process_fields ~global_attrs l =
   let loc = l.pld_name.loc in
   let mlname = l.pld_name.txt in
@@ -1221,7 +1232,11 @@ and gen_funs ~global_attrs p =
         let ty = parse_typ ~global_attrs ty in
         lazy (js2ml_fun ty), lazy (ml2js_fun ty)
     | None, Ptype_abstract ->
-        let ty = Js in
+        let ty =
+          match p.ptype_params with
+          | [{ptyp_desc = Ptyp_var label; _},  Invariant] -> Js_var label
+          | _ -> Js_any
+        in 
         lazy (js2ml_fun ty), lazy (ml2js_fun ty)
     | _, Ptype_variant cstrs ->
         let prepare_constructor c =
@@ -1270,9 +1285,23 @@ and gen_funs ~global_attrs p =
               (Exp.newtype (mknoloc v)
                  (Exp.constraint_
                     to_js
-                    (Typ.arrow Nolabel (Typ.constr (mknoloc (Longident.parse name)) [Typ.constr (mknoloc (Longident.parse v)) []]) ojs_typ)))
+                    (Typ.arrow Nolabel (Typ.constr (mknoloc (Longident.parse name)) [Typ.constr (mknoloc (Longident.parse v)) []]) ojs_any_typ)))
           ]
       end
+  | [{ptyp_desc = Ptyp_var label; ptyp_loc = _; ptyp_attributes = _; ptyp_loc_stack = _}, Invariant] ->
+      let f (name, input_typ, ret_typ, code) =
+        match code with
+        | None -> None
+        | Some code ->
+            Some
+              (Vb.mk ~loc:p.ptype_loc
+                 (Pat.constraint_
+                    (Pat.var (mknoloc name))
+                    (gen_typ (Arrow {ty_args = [{lab=Arg; att=[]; typ = input_typ}]; ty_vararg = None; unit_arg = false; ty_res = ret_typ})))
+                 code)
+      in
+      choose f [ name ^ "_of_js", Js_var label, Name (name, [Typ_var label]), of_js;
+                 name ^ "_to_js", Name (name, [Typ_var label]),  Js_var label, to_js ]
   | _ ->
       let f (name, input_typ, ret_typ, code) =
         match code with
@@ -1285,8 +1314,8 @@ and gen_funs ~global_attrs p =
                     (gen_typ (Arrow {ty_args = [{lab=Arg; att=[]; typ = input_typ}]; ty_vararg = None; unit_arg = false; ty_res = ret_typ})))
                  code)
       in
-      choose f [ name ^ "_of_js", Js, Name (name, []), of_js;
-                 name ^ "_to_js", Name (name, []), Js, to_js ]
+      choose f [ name ^ "_of_js", Js_any, Name (name, []), of_js;
+                 name ^ "_to_js", Name (name, []), Js_any, to_js ]
 
 and gen_decl ~global_attrs = function
   | Type (rec_flag, decls) ->
@@ -1329,7 +1358,7 @@ and gen_classdecl cast_funcs = function
       let obj = Cl.let_ Nonrecursive cast_funcs obj in
       Ci.mk
         (mknoloc class_name)
-        (Cl.fun_ Nolabel None (Pat.constraint_ (Pat.var (mknoloc x)) ojs_typ) obj)
+        (Cl.fun_ Nolabel None (Pat.constraint_ (Pat.var (mknoloc x)) ojs_any_typ) obj)
   | Constructor {class_name; js_class_name; class_arrow = {ty_args; ty_vararg; unit_arg; ty_res}} ->
       let formal_args, concrete_args = prepare_args ty_args ty_vararg in
       let obj = ojs_new_obj_arr (ojs_variable js_class_name) concrete_args in
@@ -1371,13 +1400,13 @@ and gen_class_cast = function
         Vb.mk (Pat.var (mknoloc (class_name ^ "_to_js")))
           (Exp.fun_ Nolabel None
              (Pat.constraint_ (Pat.var (mknoloc arg)) class_typ)
-             (Exp.constraint_ (Exp.send (var arg) (mknoloc "to_js")) ojs_typ))
+             (Exp.constraint_ (Exp.send (var arg) (mknoloc "to_js")) ojs_any_typ))
       in
       let of_js =
         let arg = fresh() in
         Vb.mk (Pat.var (mknoloc (class_name ^ "_of_js")))
           (Exp.fun_ Nolabel None
-             (Pat.constraint_ (Pat.var (mknoloc arg)) ojs_typ)
+             (Pat.constraint_ (Pat.var (mknoloc arg)) ojs_any_typ)
              (Exp.constraint_ (Exp.apply (Exp.new_ (mknoloc (Longident.Lident class_name))) [Nolabel, var arg]) class_typ))
       in
       [to_js; of_js]
@@ -1399,7 +1428,7 @@ and gen_def loc decl ty =
       | Arrow {ty_args; ty_vararg; unit_arg; ty_res} ->
           let this, s = qualified_path s in
           let formal_args, concrete_args = prepare_args ty_args ty_vararg in
-          let res this = ojs_call_arr (ml2js Js this) (str s) concrete_args in
+          let res this = ojs_call_arr (ml2js Js_any this) (str s) concrete_args in
           begin match ty_args, ty_vararg, unit_arg with
           | [], None, false -> js2ml_unit ty_res (res this)
           | [], _, _

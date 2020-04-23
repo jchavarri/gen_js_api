@@ -13,48 +13,52 @@
 *)
 
 
-type t
+type 'a t
 
-external t_of_js: t -> t = "%identity"
-external t_to_js: t -> t = "%identity"
+type top
 
-external string_of_js: t -> string = "caml_js_to_string"
-external string_to_js: string -> t = "caml_js_from_string"
+type any = top t
 
-external int_of_js: t -> int = "%identity"
-external int_to_js: int -> t = "%identity"
+external t_of_js: 'a t -> 'a t = "%identity"
+external t_to_js: 'a t -> 'a t = "%identity"
 
-external bool_of_js: t -> bool = "caml_js_to_bool"
-external bool_to_js: bool -> t = "caml_js_from_bool"
+external string_of_js: 'a t -> string = "caml_js_to_string"
+external string_to_js: string -> 'a t = "caml_js_from_string"
 
-external float_of_js: t -> float = "%identity"
-external float_to_js: float -> t = "%identity"
+external int_of_js: 'a t -> int = "%identity"
+external int_to_js: int -> 'a t = "%identity"
 
-external obj: (string * t) array -> t = "caml_js_object"
+external bool_of_js: 'a t -> bool = "caml_js_to_bool"
+external bool_to_js: bool -> 'a t = "caml_js_from_bool"
 
-external variable: string -> t = "caml_js_var"
+external float_of_js: 'a t -> float = "%identity"
+external float_to_js: float -> 'a t = "%identity"
 
-external internal_get: t -> t -> t = "caml_js_get"
-external internal_set: t -> t -> t -> unit = "caml_js_set"
+external obj: (string * top) array -> 'b = "caml_js_object"
 
-external get: t -> string -> t = "caml_js_get"
-external set: t -> string -> t -> unit = "caml_js_set"
+external variable: string -> 'a t = "caml_js_var"
 
-external internal_type_of: t -> t = "caml_js_typeof"
+external internal_get: 'a -> 'b -> 'c = "caml_js_get"
+external internal_set: 'a -> 'b -> 'c -> unit = "caml_js_set"
+
+external get: 'a t -> string -> 'b t = "caml_js_get"
+external set: 'a t -> string -> 'b t -> unit = "caml_js_set"
+
+external internal_type_of: 'a t -> string t = "caml_js_typeof"
 let type_of x = string_of_js (internal_type_of x)
 
-external pure_js_expr: string -> t = "caml_pure_js_expr"
+external pure_js_expr: string -> 'a = "caml_pure_js_expr"
 let null = pure_js_expr "null"
 let undefined = pure_js_expr "undefined"
 
-external equals: t -> t -> bool = "caml_js_equals"
+external equals: 'a -> 'b -> bool = "caml_js_equals"
 
 let global = pure_js_expr "joo_global_object"
 
-external new_obj: t -> t array -> t = "caml_js_new"
+external new_obj: 'a t -> any array -> 'b t = "caml_js_new"
 
-external call: t -> string -> t array -> t = "caml_js_meth_call"
-external apply: t -> t array -> t = "caml_js_fun_call"
+external call: 'a t -> string -> 'b array -> 'c t = "caml_js_meth_call"
+external apply: 'a t -> 'b array -> 'c t = "caml_js_fun_call"
 
 let array_make n = new_obj (get global "Array") [|int_to_js n|]
 let array_get t i = internal_get t (int_to_js i)
@@ -89,24 +93,24 @@ let option_to_js f = function
   | Some x -> f x
   | None -> null
 
-class obj (x:t) =
+class obj (x: any) =
   object
-    method to_js = x
+    method to_js: any = x
   end
 
-external fun_to_js: int -> (t -> 'a) -> t = "caml_js_wrap_callback_strict"
-external fun_to_js_args: (t -> 'a) -> t = "caml_ojs_wrap_fun_arguments"
+external fun_to_js: int -> ('a t -> 'b) -> 'c t = "caml_js_wrap_callback_strict"
+external fun_to_js_args: ('a t -> 'b) -> 'c t = "caml_ojs_wrap_fun_arguments"
 
 let has_property o x = not (get o x == undefined)
-external iter_properties: t -> (string -> unit) -> unit = "caml_ojs_iterate_properties"
+external iter_properties: 'a t -> (string -> unit) -> unit = "caml_ojs_iterate_properties"
 
 let empty_obj () = new_obj (get global "Object") [||]
 
 let apply_arr o arr = call o "apply" [| null; arr |]
 let call_arr o s arr = call (get o s) "apply" [| o; arr |]
-external new_obj_arr: t -> t -> t = "caml_ojs_new_arr"
+external new_obj_arr: 'a t -> any -> 'b t = "caml_ojs_new_arr"
 
-external delete: t -> string -> unit = "caml_js_delete"
+external delete: 'a t -> string -> unit = "caml_js_delete"
 
 let is_null x =
   equals x null

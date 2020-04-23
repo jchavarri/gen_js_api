@@ -2,14 +2,14 @@
 (* See the attached LICENSE file.                                         *)
 (* Copyright 2015 by LexiFi.                                              *)
 
-type t = Ojs.t
+type 'a t = 'a Ojs.t
 
 let name x = Ojs.string_of_js (Ojs.get x "name")
 let message x = Ojs.string_of_js (Ojs.get x "message")
 let stack x = Ojs.option_of_js Ojs.string_of_js (Ojs.get x "stack")
 let to_string x = Ojs.string_of_js (Ojs.call x "toString" [||])
 
-exception Error of t
+exception Error of Ojs.any
 
 let () = Callback.register_exception "jsError" (Error (Ojs.obj [||]))
 
